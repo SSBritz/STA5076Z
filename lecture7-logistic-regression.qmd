@@ -1,0 +1,234 @@
+---
+title: "STA5076Z Lecture 7 - Logistic Regression"
+format: 
+  html:
+    fig-width: 6
+    fig-height: 6
+    code-fold: show
+    code-summary: "Show/Hide Code"
+    code-overflow: wrap
+    code-tools: true
+execute:
+  warning: false
+bibliography: references.bib
+---
+
+```{css}
+/*| echo: false*/
+p {
+  text-align: justify;
+}
+
+table {
+  width: auto !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+```
+
+## Example -- Default data (ISLR)
+
+This example entails the simulated (fictitious) dataset `Default` from the `ISLR` package. In this binary classification problem, we aim to predict whether or not an individual will `default` on their credit card payment based on three features:
+
+-   `student`: Whether they are a student (yes/no)
+-   `balance`: The average balance that the customer has remaining on their credit card after making their monthly payment
+-   `income`: Annual income
+
+**Exploration**
+
+Ignoring the `student` variable for now, we see a very strong (somewhat exaggerated!) relationship between `balance` and `default`. Since the overall default rate is approximately 3%, we will only plot a random subsample of the non-defaulters, similar to what was done in Figure 4.1 of @james2013introduction.
+
+```{r}
+#| fig.align: center
+#| label: fig-def_scatter
+#| fig-cap: Annual incomes and monthly credit card balances of a subsample from the Default dataset
+
+library(ISLR)
+data(Default)
+
+def_prop <- mean(as.numeric(Default$default) - 1) #Proportion of defaulters...only 0.0333
+
+#Let's plot non-defaulters to defaulters at a 4:1 ratio
+def_rows <- which(Default$default == 'No')
+set.seed(5076)
+Default_plot <- Default[-sample(def_rows, length(def_rows)*(1 - def_prop*4)),]
+
+# Using base R plotting
+plot(Default_plot$balance, Default_plot$income,
+     col = ifelse(Default_plot$default == 'Yes', 'darkorange', 'lightblue'),
+     pch = ifelse(Default_plot$default == 'Yes', 3, 1),
+     xlab = 'Balance', ylab = 'Income')
+legend('topright', c('Default', 'Non-default'), 
+       col = c('darkorange', 'lightblue'), 
+       pch = c(3, 1))
+```
+
+Recreating the boxplots in that same figure:
+
+```{r}
+#| label: fig-def_box
+#| fig-cap: Boxplots of balance and income as a function of default status
+
+library(ggplot2)
+library(gridExtra) #For grid.arrange() - to combine multiple ggplots in one plot
+
+# Using ggplot2:
+box_bal <- ggplot(Default_plot, aes(x = default, y = balance, group = default)) + 
+  geom_boxplot(aes(fill = default)) +
+  scale_fill_manual(values=c('lightblue', 'darkorange')) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = 'none') 
+
+box_inc <- ggplot(Default_plot, aes(x = default, y = income, group = default)) + 
+  geom_boxplot(aes(fill = default)) +
+  scale_fill_manual(values=c('lightblue', 'darkorange')) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = 'none') 
+
+grid.arrange(box_bal, box_inc, ncol = 2)
+```
+
+**Model fit**
+
+Now let's fit a logistic regression model to the entire dataset, using all three features, and print the results.
+
+```{r}
+#| label: tbl-def_van
+#| tbl-cap: Summary of logistic regression model fitted to the Default dataset
+
+library(kableExtra) 
+library(broom) #For nice tables
+log_mod <- glm(default ~ ., data = Default, family = binomial)
+
+log_mod |> 
+  tidy() |>
+  kable(digits = 2) |> 
+  kable_styling(full_width = FALSE)
+```
+
+**Interpretation**
+
+In order to interpret the regression coefficients, we calculate the exponent thereof.
+
+```{r warning=FALSE}
+#| label: tbl-def_odds
+#| tbl-cap: Odds effects for the logistic regression model fitted to the Default dataset
+
+exp(coef(log_mod)) |>
+  kbl(format = 'html',
+      digits = 3, 
+      col.names = c('<i>X</i><sub>j</sub>', 'exp(&beta;<sub>j</sub>)'),
+      escape = FALSE) |>
+  kable_styling(full_width = FALSE)
+```
+
+## Example -- Heart failure data
+
+@heart analyses the medical records of 299 patients who experienced heart failure, with data collected during the patients' follow-up period. Each patient profile contains 12 clinical features, the details of which are given in Table 1 of the paper. The goal is to predict the 13^th^ variable, namely death event (binary).
+
+After setting aside 20% of the data for testing, start by fitting the saturated model to the training data.
+
+```{r}
+#| label: tbl-heart_van
+#| tbl-cap: Saturated logistic regression model fitted to the heart failure dataset
+
+# Read in the data and turn the categorical features to factors
+heart <- read.csv('data/heart.csv', header = TRUE,
+                  colClasses = c(anaemia='factor',
+                                 diabetes = 'factor',
+                                 high_blood_pressure = 'factor',
+                                 sex = 'factor',
+                                 smoking = 'factor',
+                                 DEATH_EVENT = 'factor'))
+
+# Create indices for train/test split
+set.seed(4026)
+train <- sample(nrow(heart), size=0.8*nrow(heart))
+
+# Always check the prevalence rate
+y_train <- heart$DEATH_EVENT[train]
+
+# Fit "vanilla" logistic regression
+heart_lr <- glm(DEATH_EVENT ~ ., data = heart, subset = train, family = 'binomial')
+heart_lr |> 
+  tidy() |>
+  kable(digits = 2)
+```
+
+First, we observe that approximately a third of the patients in the training set passed away (`r round(mean(as.numeric(y_train) - 1)*100, 1)`% to be exact).
+
+In @tbl-heart_van we see that a few of the predictors are not statistically significant in this model at any reasonable significance level and should be removed, most notably the hypertension, smoking, and decrease of hemoglobin indicator variables (`high_blood_pressure1`, `smoking1` and `anaemia1`).
+
+**Regularisation**
+
+Using $L_1$ regularisation to perform the variable selection:
+
+```{r}
+#| label: fig-heart_l1
+#| fig-cap: Coefficient profiles for $L_1$ logistic regression on the heart failure dataset as a function of the constraint
+
+library(glmnet)
+library(dplyr)  
+library(plotmo) #Specifically for glmnet plotting (also has a gbm function)
+
+x_train <- select(heart, -DEATH_EVENT) |> slice(train)
+
+# Fit the lasso and plot using plotmo
+heart_l1 <- glmnet(x_train, y_train, alpha = 1, standardize = T, family = 'binomial')
+plot_glmnet(heart_l1, xvar = 'norm')
+```
+
+@fig-heart_l1 shows how the regression coefficients are reduced to zero as the $L_1$ norm constraint decreases. To decide on the penalty to apply -- and by extension the number of variables to drop -- we again use 10-fold cross-validation with classification error as loss function.
+
+```{r}
+#| label: fig-heart_l1_cv
+#| fig-cap: 10-fold CV classification errors as a function of $\\log(\\lambda)$ for $L_1$ logistic regression applied to the heart failure dataset
+
+# cv.glmnet cannot take factor variables directly, we must create explicit dummy variables
+x_train_dummies <- makeX(x_train) #For which the package has this function
+
+set.seed(1)
+heart_l1_cv <- cv.glmnet(x_train_dummies, y_train, family = 'binomial', type.measure = 'class')
+
+# Plot 
+plot(heart_l1_cv)
+```
+
+In @fig-heart_l1_cv and from the output below we see that the best model according to cross-validated classification accuracy contains five features. **However, it is crucial to note** that this model displays high variance, and that setting different seeds will yield different results! Showing the selected features (with non-zero coefficients):
+
+```{r}
+round(coef(heart_l1_cv, s = 'lambda.min'), 3)
+```
+
+This will be our selected model, noting that the included variables were all significant at $\alpha = 0.07$ in the saturated model. `sex` was also borderline significant in this model and had the largest absolute coefficient (although the largest standard error too). We might wish to include this variable for physiological reasons, in which case we can relax the regularisation penalty.
+
+**Prediction**
+
+Using both the saturated and regularised models, we can now predict on the test data:
+
+```{r}
+x_test <- select(heart, -DEATH_EVENT) |> slice(-train) #predict.glm requires matrix
+x_test_dummies <- makeX(x_test)            #with dummy variables
+y_test <- heart$DEATH_EVENT[-train]
+
+pred_full <- predict(heart_lr, newdata = heart[-train, ], type = 'response')              #response for p(x)
+pred_l1 <- predict(heart_l1_cv, x_test_dummies, s = 'lambda.min', type = 'response')[,1]  #default output is matrix
+```
+
+For now, we will use the default decision rule threshold of 0.5 to turn the probabilities into predictions.
+
+```{r}
+Y_hat_full <- ifelse(pred_full >= 0.5, '1', '0') #In case we want to output qualitative labels
+Y_hat_l1 <- round(pred_l1) #Most of the time, boolean will do
+
+#Now calculate error rate:
+(error_full <- mean(Y_hat_full != y_test))
+(error_l1 <- mean(Y_hat_l1 != y_test))
+```
+
