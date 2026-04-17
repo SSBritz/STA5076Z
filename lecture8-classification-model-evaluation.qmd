@@ -1,0 +1,410 @@
+---
+title: "STA5076Z Lecture 8 -- Classification Model Evaluation"
+format: 
+  html:
+    fig-width: 6
+    fig-height: 6
+    code-fold: show
+    code-summary: "Show/Hide Code"
+    code-overflow: wrap
+    code-tools: true
+execute:
+  warning: false
+bibliography: references.bib
+---
+
+```{css}
+/*| echo: false*/
+p {
+  text-align: justify;
+}
+
+table {
+  width: auto !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+```
+
+## Example -- Default data (ISLR)
+
+We return to the example in the previous lecture: a simulated (fictitious) dataset `Default` from the `ISLR` package. In this binary classification problem, we aim to predict whether or not an individual will `default` on their credit card payment based on three features:
+
+-   `student`: Whether they are a student (yes/no)
+-   `balance`: The average balance that the customer has remaining on their credit card after making their monthly payment
+-   `income`: Annual income
+
+### Decision boundaries: 1-dimensional
+
+We start by fitting a logistic regression model to the entire dataset, using only the `balance` variable. We then plot the curve (@fig-d1) and apply the default decision rule.
+
+```{r}
+#| label: fig-d1
+#| fig-cap: Logistic curve fitted to the default dataset using only balance as predictor. A decision rule based on a threshold of 0.5 is applied.
+library(ISLR)
+
+# 1-dimensional fit
+mod1 <- glm(default ~ balance, 'binomial', Default)
+
+# Calculate curve values from fit
+Y <- as.numeric(Default$default) - 1
+x_range <- seq(0, max(Default$balance)*1.2, length.out = 1000)
+coefs_1 <- mod1$coefficients
+logit_1 <- coefs_1[1] + coefs_1[2]*x_range
+sigmoid <- exp(logit_1)/(1 + exp(logit_1))
+
+# Plot the fit
+plot(x_range, sigmoid, type = 'l', lwd = 2, col = 'gray', xlab = 'Balance', ylab = 'p(x)')
+tau <- 0.5 #Threshold
+x_cutoff <- (log(tau/(1-tau)) - coefs_1[1])/(coefs_1[2])
+abline(v = x_cutoff, lwd = 2, col = 'navy')
+points(x_cutoff, 0, pch = 4, col = 'navy', cex = 2)
+segments(-500, tau, x_cutoff, tau, col = 'gray', lty = 4)
+points(Default$balance, Y, pch = 16, col = ifelse(Default$balance < x_cutoff, 'green', 'black'), cex = 0.5)
+legend('right', c(expression(paste(hat(Y), ' = 1')), '', expression(paste(hat(Y), ' = 0'))),
+       pch = 16, col = c('black', 'white', 'green'))
+```
+
+For the 1-dimensional case, the decision boundary is just a single point. In this instance, observations with balance $\geq$ `r round(x_cutoff)` will yield $\hat{p}(x) \geq 0.5$ and will be classified as defaulters.
+
+### Decision boundaries: 2-dimensional
+
+The linearity of the decision boundary is better illustrated for $p = 2$, so let's add the `income` variable to the model.
+
+```{r}
+#| label: rglhook
+#| include: false
+#| cache: false
+knitr::knit_hooks$set(webgl = rgl::hook_webgl)
+```
+
+```{r}
+#| webgl: true
+
+library(rgl)
+
+# 2-dimensional fit
+mod2 <- glm(default ~ balance + income, 'binomial', Default)
+coefs_2 <- coef(mod2)
+
+x1s <- seq(0, max(Default$balance)*1.2, length.out = 100)
+x2s <- seq(min(Default$income)*0.8, max(Default$income)*1.2, length.out = 100)
+
+sigmoid2 <- function(x1s, x2s) exp(cbind(1, x1s, x2s)%*%coef(mod2))/(1 + exp(cbind(1, x1s, x2s)%*%coef(mod2)))
+
+# Plot the curve
+plot2 <- persp3d(x1s, x2s, outer(x1s, x2s, sigmoid2), aspect = c(1, 1, 0.5), col = 'gray', alpha = 0.5,
+                 xlab = 'balance', ylab = 'income', zlab = 'p(x)')
+view3d(theta = 0, phi = -75, fov = 45, zoom = 0.75)  #Initial view settings
+
+#Add vertical plane, just based on g(X) = 0
+planes3d(coefs_2[2], coefs_2[3], 0, coefs_2[1], col = 'navy', lwd = 3, alpha = 0.5)
+
+# Use predict() for the classifications
+p2 <- predict(mod2, type = 'response') 
+points3d(Default$balance, Default$income, Y, col = ifelse(p2 >= 0.5, 'green', 'black'), size = 6)
+```
+
+**Note that this figure is interactive**
+
+Here we can see that the contour on the sigmoid surface corresponding to a constant threshold is a straight line. Projecting this line onto the xy-plane yields the resulting linear decision boundary.
+
+```{r}
+#| label: fig-d2_bound
+#| fig-cap: The logistic regression decision boundary for the default dataset using balance and income as predictors.
+
+plot(Default$balance, Default$income,
+     col = ifelse(Default$default == 'Yes', 'darkorange', 'lightblue'),
+     pch = ifelse(Default$default == 'Yes', 3, 1),
+     xlab = 'Balance', ylab = 'Income')
+legend('topright', c('Default', 'Non-default'), 
+       col = c('darkorange', 'lightblue'), 
+       pch = c(3, 1))
+# Add the decision boundary
+abline(-coefs_2[1]/coefs_2[3], -coefs_2[2]/coefs_2[3], col = 'navy', lwd = 3) #Do the math!!
+```
+
+It can easily be shown that the decision boundary for the decision rule threshold $\hat{p}(\boldsymbol{X}) \geq 0.5$ corresponds to the set of points in the parameters space for which the odds are 1 (or, equivalently, the log-odds are zero). Using this fact allows us to easily determine the boundary in @fig-d2_bound.
+
+### Decision boundaries: 3-dimensional
+
+Finally, we will now add the `student` variable (coded as 0 and 1) to the model. The following plot shows a 3-dimensional image of the data, with the decision boundary added as a plane. Note that the sigmoidal curve will be 4-dimensional here.
+
+```{r}
+#| webgl: true
+
+# 3-dimensional fit
+mod3 <- glm(default ~ balance + income + student, 'binomial', Default)
+coefs_3 <- coef(mod3)
+
+# Plot the data
+plot3d(Default$student, Default$balance, Default$income,
+       xlab = 'student', ylab = 'balance', zlab = 'income',
+       col = ifelse(Default$default == 'Yes', 'orange', 'lightblue'),
+       size = 5)
+view3d(theta = 45, phi = 45, fov = 45, zoom = 0.9)  #Initial view settings
+
+# Add the decision boundary. Easy with planes3d, since it is set up similarly
+planes3d(coefs_3[4], coefs_3[2], coefs_3[3], coefs_3[1], col = 'navy', lwd = 3, alpha = 0.5)
+```
+
+**Note that this figure is interactive**
+
+Now that we have sufficiently explored the logistic regression's decision boundaries, we turn our attention to measuring the accuracy of the classifications resulting from these decision boundaries.
+
+## Model Evaluation
+
+Let's use the model with all three predictors and the decision rule $\hat{p}(\boldsymbol{X}) \geq 0.5$ to create a simple **confusion matrix**.
+
+```{r}
+
+# First get predictions (probabilities) from the model
+phat3 <- predict(mod3, Default, 'response')
+
+# Then apply the decision rule
+yhat3 <- ifelse(phat3 >= 0.5, 'Yes', 'No')
+
+y <- Default$default #True labels
+
+# Using table(). Caret package has a function too
+confmat3 <- table(yhat3, y, dnn = c('Predicted label', 'True label'))
+
+# Calculate training error
+error3 <- mean(yhat3 != y)
+
+confmat3
+```
+
+All of the discussed metrics can be calculated manually from a confusion matrix. Alternatively, we could use packages like `caret` or `MLmetrics` to set up the confusion matrix and get the measurements directly, as shown here:
+
+```{r}
+library(caret)
+library(MLmetrics)
+
+# Confusion matrix and metrics using caret
+caretmat3 <- confusionMatrix(as.factor(yhat3), y, positive = 'Yes') #NB to set the ref category!
+caretmat3
+
+# Using an MLMetrics function to calculate F1 score, caret has similar
+f1_mod3 <- MLmetrics::F1_Score(y, yhat3, positive = 'Yes')
+```
+
+Our logistic regression model on the `Default` dataset yielded a training F~1~ score of `r round(f1_mod3, 3)`, indicating quite poor performance. This is due to the low sensitivity (recall) -- our model identified less than a third of the defaulters! Comparing this to the training accuracy of `r round(mean(y == yhat3)*100, 2)`\% shows how misleading classification accuracy/misclassification rate can be for imbalanced data. 
+
+The question then turns to whether one can improve the overall performance of the model by increasing the sensitivity at the cost of precision. This can indeed be achieved by changing the decision rule threshold to yield different predictions and resulting confusion matrices, and, therefore, adjusted metrics. Note that all of this is applied to the training data for this example (which is the entire dataset) in order to illustrate the principle.
+
+### Changing the threshold
+
+Using the same saturated model on the `Default` data as previously, we will now lower the decision rule threshold to, say, $\tau = 0.2$ (arbitrarily chosen), such that $\hat{Y} = 1$ if $\hat{p}(X) > 0.2$. Therefore, we are more liberal in our classification of defaulters.
+
+```{r}
+yhat3_2 <- ifelse(phat3 >= 0.2, 'Yes', 'No')
+confmat3_2 <- table(yhat3_2, y, dnn = c('Predicted label', 'True label'))
+confmat3_2
+```
+
+Comparing this to the previous results, where $\tau = 0.5$ was used:
+
+```{r}
+#| label: tbl-comp
+#| tbl-cap: Comparison of the TPR, FPR, and accuracy for two different decision rule thresholds -- 0.5 and 0.2 -- applied to the saturated logistic regression model fitted to the Default dataset.
+
+library(kableExtra)
+
+tprs <- c(sensitivity(as.factor(yhat3), y, 'Yes'),
+          sensitivity(as.factor(yhat3_2), y, 'Yes'))
+
+# Note that the following function requires the negative label specified! Always check help files.
+fprs <- c(1 - specificity(as.factor(yhat3), y, 'No'),     
+          1 - specificity(as.factor(yhat3_2), y, 'No'))
+accs <- c(mean(yhat3 == y), mean(yhat3_2 == y))
+
+compar <- rbind(tprs, fprs, accs) 
+colnames(compar) <- c('$\\tau$ = 0.5', '$\\tau$ = 0.2')
+rownames(compar) <- c('TPR', 'FPR', 'Accuracy')
+
+compar |> kable(digits = 3)
+```
+
+We can now vary $\tau$ over a range of values and keep track of the TPR and FPR. To illustrate this, consider again the 1-variable model where we include only `Balance`. For convenience and clearer illustration, @fig-thresh_anim only displays a subsample of 200 observations.
+
+```{r}
+#| animation-hook: gifski
+#| interval: 0.25
+#| label: fig-thresh_anim
+#| fig-cap: The effect of varying the decision rule threshold on the TPR and FPR.
+#| fig-width: 9
+#| out-width: 100%
+
+# Create a range of thresholds and empty vectors for their corresponding metrics
+taus <- seq(0, 1, 0.01) 
+TPR <- vector(length = length(taus))
+FPR <- vector(length = length(taus))
+
+# Same curve as above
+set.seed(1)
+sub_Default <- Default[sample.int(nrow(Default), 200),] #Only 200 obs
+mod_t <- glm(default ~ balance, data = sub_Default, family = 'binomial')
+Y_sub <- as.numeric(sub_Default$default) - 1
+x_range <- seq(0, max(sub_Default$balance)*1.2, length.out = 1000)
+coefs_t <- mod_t$coefficients
+logit_t <- coefs_t[1] + coefs_t[2]*x_range
+sigmoid <- exp(logit_t)/(1 + exp(logit_t))
+phat_t <- predict(mod_t, type = 'response')
+
+par(mfrow=c(1,2))
+
+iter <- 0
+for (tau in taus){
+  iter <- iter + 1
+  yhat_t <- ifelse(phat_t >= tau, 1, 0)
+  x_cutoff <- (log(tau/(1-tau)) - coefs_t[1])/(coefs_t[2]) #solve from logit 
+  
+  # Left plot (curve)
+  plot(x_range, sigmoid, type = 'l', lwd = 2, col = 'orangered', xlab = 'Balance', ylab = 'p(x)')
+  abline(v = x_cutoff, lwd = 2, col = 'navy')
+  segments(-500, tau, x_cutoff, tau, col = 'gray', lty = 4)
+  points(sub_Default$balance, Y_sub, pch = 16, col = ifelse(sub_Default$balance < x_cutoff, 'green', 'black'))
+  legend('right', c(expression(paste(hat(Y), ' = 1')), '', expression(paste(hat(Y), ' = 0'))), 
+         pch = 16, col = c('black', 'white', 'green'))
+  
+  TPR[iter] <- sum(yhat_t*Y_sub == 1)/sum(Y_sub)
+  FPR[iter] <- sum(yhat_t == 1 & Y_sub == 0)/sum(Y_sub == 0)
+  E <- mean(yhat_t != Y_sub)
+  text(0, 0.9, pos = 4, substitute(paste('Tau = ', tau), list(tau = tau)), cex = 1.2)
+  text(0, 0.8, pos = 4, substitute(paste('TPR = ', TPR), list(TPR = round(TPR[iter], 3))), cex = 1.2)
+  text(0, 0.7, pos = 4, substitute(paste('FPR = ', FPR), list(FPR = round(FPR[iter], 3))), cex = 1.2)
+  text(0, 0.6, pos = 4, substitute(paste('Misclass = ', E), list(E = round(E, 3))), cex = 1.2)
+  
+  # Right plot (errors)
+  plot(0,0, 'n', xlim = c(0,1), ylim = c(0,1), ylab = '', xlab = 'Threshold')
+  lines(seq(0, tau, length.out = iter), TPR[1:iter], 'l', lwd = 2, col = 'orange')
+  lines(seq(0, tau, length.out = iter), FPR[1:iter], 'l', lwd = 2, col = 'lightblue')
+  legend('topright', c('TPR', 'FPR'), lty = 1, lwd = 2, col = c('orange', 'lightblue'))
+}
+```
+
+This pattern can now be combined in the **Receiver Operating Characteristic (ROC) curve**.
+
+### ROC Curve
+
+@fig-roc shows the ROC curve for the saturated model fitted to the entire `Default` dataset with the points corresponding to $\tau = 0.2$ and $\tau = 0.5$ highlighted on the curve. We will make use of the `ROCR` package.
+
+```{r}
+#| label: fig-roc
+#| fig-cap: ROC curve for the full model fitted to the Default dataset. Thresholds of 0.2 and 0.5 are highlighted.
+
+library(ROCR)
+
+# Using the full model
+pred <- prediction(phat3, Y)
+perf  <- performance(pred, 'tpr', 'fpr')
+plot(perf, colorize = FALSE, col = 'black')
+lines(c(0,1), c(0,1), col = 'gray', lty = 4)
+
+# tau = 0.5
+points(compar[1,1] ~ compar[2,1], col = 'red', pch = 16)
+text(compar[1,1] ~ compar[2,1], labels = 0.5, pos = 4)
+
+# tau = 0.2
+points(compar[1,2] ~ compar[2,2], col = 'red', pch = 16)
+text(compar[1,2] ~ compar[2,2], labels = 0.2, pos = 4)
+```
+
+```{r}
+auc <- performance(pred, measure = 'auc')@y.values[[1]]
+```
+
+Using `ROCR`, we can calculate the AUC for the ROC curve in @fig-roc as `r round(auc, 3)`. Although this metric can be objectively interpreted, the real value lies in comparing metrics across different models, ideally in a way that estimates out-of-sample performance.
+
+### PR Curve
+
+Considering the imbalance in the `Default` dataset, we may wish to rather consider the **Precision-Recall (PR) Curve** and its AUC, illustrated in @fig-pr.
+
+```{r}
+#| label: fig-pr
+#| fig-cap: PR curve for the full model fitted to the Default dataset.
+
+perf_pr  <- performance(pred, 'prec', 'rec')
+prauc <- performance(pred, 'aucpr')@y.values[[1]]
+
+plot(perf_pr, colorize = FALSE, col = 'black')
+text(0.3, 0.4, paste0('AUC = ', round(prauc, 3)))
+```
+
+## Example -- Heart failure data
+
+Returning to the heart failure analysis conducted by @heart, we will now compare the saturated (vanilla) logistic regression model with the $L_1$ regularised model, where minimum CV misclassification is used to determine the regularisation penalty. Note that we could also use the AUC as objective function in the regularisation by changing the `type.measure` argument in `cv.glmnet`.
+
+```{r}
+#| label: tbl-heart_comp
+#| tbl-cap: Comparison of model performance on the heart failure test set. The vanilla logistic regression model used all 12 features; the Lasso model used 5.
+
+library(glmnet)
+library(dplyr)
+library(caret)
+
+# Read in the data and turn the categorical features to factors
+heart <- read.csv('data/heart.csv', header = TRUE,
+                  colClasses = c(anaemia='factor',
+                                 diabetes = 'factor',
+                                 high_blood_pressure = 'factor',
+                                 sex = 'factor',
+                                 smoking = 'factor',
+                                 DEATH_EVENT = 'factor'))
+
+# Create indices for train/test split
+set.seed(4026)
+train <- sample(nrow(heart), size=0.8*nrow(heart))
+
+# Always check the prevalence rate!
+y_train <- heart$DEATH_EVENT[train]
+
+# Fit "vanilla" logistic regression
+heart_lr <- glm(DEATH_EVENT ~ ., data = heart, subset = train, family = 'binomial')
+
+#Fit lasso
+x_train_dummies <- select(heart, -DEATH_EVENT) |> 
+  slice(train) |>
+  makeX()
+
+set.seed(1)
+heart_l1_cv <- cv.glmnet(x_train_dummies, y_train, family = 'binomial', type.measure = 'class')
+
+x_test_dummies <- select(heart, -DEATH_EVENT) |> 
+  slice(-train) |>
+  makeX()            
+y_test <- heart$DEATH_EVENT[-train]
+
+pred_full <- predict(heart_lr, newdata = heart[-train, ], type = 'response') #response for p(x)
+pred_l1 <- predict(heart_l1_cv, x_test_dummies, s = 'lambda.min', type = 'response')[,1] #default output is matrix
+
+# Write a function to calculate the metrics we want 
+my_metrics <- function(pred, labs){
+  p_labs <- round(pred)       #Threshold 0.5
+  t <- table(p_labs, labs)
+  acc <- mean(p_labs == labs) #accuracy
+  rec <- recall(t, '1')       #from caret
+  sp <- specificity(t, '0')   #ditto
+  pr <- precision(t, '1')     #ditto
+  f1 <- F_meas(t, '1')        #ditto
+  rocauc <- performance(prediction(pred, labs), 'auc')@y.values[[1]]   #from ROCR
+  prauc <- performance(prediction(pred, labs), 'aucpr')@y.values[[1]]  #from ROCR
+  metrics <- c('Accuracy' = acc,
+               'Recall' = rec,
+               'Specificity' = sp,
+               'Precision' = pr,
+               'F1' = f1,
+               'ROC AUC' = rocauc,
+               'PR AUC' = prauc)
+  return(metrics)
+}
+
+rbind('Vanilla LR' = my_metrics(pred_full, y_test),
+                       'Lasso LR' = my_metrics(pred_l1, y_test)) |>
+  kable(digits = 3)
+```
+
+We observe that Lasso regularisation improved the results from the baseline vanilla logistic regression across all metrics (F~1~ score only marginally) except recall, which is arguably the most important metric for death events! Whilst regularisation did yield higher accuracy on the test set, it correctly identified only two-thirds of death events, again illustrating the danger of focusing solely on accuracy even with mildly imbalanced data. 
+
+It should be highlighted once more that there is some notable sampling variability, both in the train/test split and the cross-validation. In fact, @heart presented their results, across a variety of models and metrics, as the averages of 100 results from randomised train/test splits. Replicating this as well as repeated CV sampling are left as homework exercises.
