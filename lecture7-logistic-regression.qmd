@@ -1,5 +1,5 @@
 ---
-title: "STA5076Z Lecture 7 - Logistic Regression"
+title: "STA5076Z Lecture 7 -- Logistic Regression"
 format: 
   html:
     fig-width: 6

@@ -1,0 +1,283 @@
+---
+title: "STA5076Z Lecture 9 -- Regression Trees"
+format: 
+  html:
+    fig-width: 6
+    fig-height: 6
+    code-fold: show
+    code-summary: "Show/Hide Code"
+    code-overflow: wrap
+    code-tools: true
+execute:
+  warning: false
+bibliography: references.bib
+---
+
+```{css}
+/*| echo: false*/
+p {
+  text-align: justify;
+}
+
+table {
+  width: auto !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+```
+
+### Example -- California housing
+
+In this example we consider a well-known dataset from the 1990 California census, which contains aggregated data for 20 640 neighbourhoods. The variables include information like the neighbourhood's median house age, the median income, total number of bedrooms and bathrooms, number of households, population, and the **location**, as can be seen here:
+
+```{r, warning=F}
+library(DT)
+calif <- read.csv('data/calif.csv')
+datatable(calif, options = list(scrollX = T, pageLength = 6))
+```
+
+\
+
+For now, we will only use the spatial information (latitude and longitude) to model the target variable: (log of) **median house price**.
+
+We begin by plotting a map of the data -- a 2-dimensional feature space -- using a colour scale to indicate the target variable.
+
+```{r}
+#| label: fig-calif_map
+#| fig-cap: Californian median neighbourhood house prices (logscale) in 1990.
+
+library(maps)
+library(RColorBrewer) # For colourblind friendly palettes
+
+# Replace with log
+calif$HousePrice <- log(calif$HousePrice)
+
+# Make custom colour scale
+n_breaks <- 9
+my_cols <- brewer.pal(n_breaks, 'YlOrBr')[cut(calif$HousePrice, breaks = n_breaks)]
+
+# Plot the data
+plot(calif$Longitude, calif$Latitude, pch = 16, cex = 0.5, bty = 'L',
+     xlab = 'Longitude', ylab = 'Latitude', col = my_cols)
+legend(x = 'topright', bty = 'n', title = 'Log Median House Price', cex = 0.9,
+       legend = round(seq(min(calif$HousePrice), max(calif$HousePrice), length.out = n_breaks), 2),
+       fill = brewer.pal(n_breaks, 'YlOrBr'))
+
+# Add the state border
+map('state', 'california', add = T, lwd = 2)
+text(-123, 35, 'Pacific Ocean')
+```
+
+There are many packages in R that implement decision trees. We will be using one of the more basic ones: `tree`. For now we are not going to split into training and testing; for illustrative purposes we shall use the entire dataset (all observations, but still only using the location information for now).
+
+Using the default stopping criteria yields the following decision tree, shown below in @fig-calif_tree.
+
+```{r}
+#| label: fig-calif_tree
+#| fig-cap: Vanilla regression tree fitted to the Cailfornia dataset.
+library(tree)
+
+#Easy as one, two, tree
+calif_tree <- tree(HousePrice ~ Latitude + Longitude, data = calif)
+
+# Plot the tree
+plot(calif_tree)
+text(calif_tree)
+```
+
+The corresponding feature space is shown below in @fig-calif_fs.
+
+```{r}
+#| label: fig-calif_fs
+#| fig-cap: Partitioned feature space for vanilla regression tree fitted to the Cailfornia dataset.
+
+# Plot the data again
+plot(calif$Longitude, calif$Latitude, pch = 16, cex = 0.5,
+     col = my_cols, xlab = 'Longitude', ylab = 'Latitude', bty = 'o')
+
+# And add the partitioned feature space
+partition.tree(calif_tree, ordvars = c('Longitude', 'Latitude'), add = T, lwd = 3)
+```
+
+Next we apply cost complexity pruning to control model complexity.
+
+### Cost complexity pruning
+
+To illustrate this, fit a regression tree to the entire training set, this time using all the predictors. Relax the stopping criteria slightly, resulting in a larger tree we can prune back.
+
+```{r}
+# First fit larger tree by relaxing stopping criteria
+# ?tree.control
+# minsize: will only consider split if at least so many observations in node
+# mincut: will only split if both child nodes then have at least so many
+# mindev: will only consider split if within-node deviance is at least this times root RSS
+
+stopcrit <- tree.control(nobs = nrow(calif), mindev = 0.003)
+calif_bigtree <- tree(HousePrice ~ . , data = calif, control = stopcrit)
+(s <- summary(calif_bigtree))
+```
+
+By slightly relaxing the stopping criterion of RSS reduction, we increased the size of the tree to `r s$size`. We also see that the only features used to split were income, house age, and latitude and longitude, so the location information was indeed very useful!
+
+Plotting the tree at this size is already quite messy (@fig-calif_big_tree), with a lot of unnecessary, indistinguishable information at the bottom.
+
+```{r}
+#| label: fig-calif_big_tree
+#| fig-cap: Large regression tree fitted to the Cailfornia dataset. What a mess!
+plot(calif_bigtree)
+text(calif_bigtree)
+```
+
+We now apply cost complexity pruning, measuring the CV RSS for each subtree.
+
+```{r}
+#| label: fig-calif_cv
+#| fig-cap: Cross-validated pruning results on the large tree fitted to the Cailfornia dataset.
+
+set.seed(4026)
+calif_cv <- cv.tree(calif_bigtree)
+
+# See str(calif_cv)
+# size = number of terminal nodes
+# dev = RSS
+# k = alpha (tuning parameter that determines tree size)
+
+calif_cv$k[1] <- 0 #First entry was -Inf
+
+# Plot everything
+plot(calif_cv$size, calif_cv$dev, type = 'o',
+     pch = 16, col = 'navy', lwd = 2,
+     xlab = 'Number of terminal nodes', ylab = 'CV RSS')
+axis(side = 1, at = 1:max(calif_cv$size), labels = 1:max(calif_cv$size))
+
+# Add alpha values to the plot:
+alpha <- round(calif_cv$k)
+axis(3, at = calif_cv$size, lab = alpha)
+mtext(expression(alpha), 3, line = 2.5, cex = 1.5)
+
+# Highlight the minimum CV Error
+T <- calif_cv$size[which.min(calif_cv$dev)]
+abline(v = T, lty = 2, lwd = 2, col = 'red')
+```
+
+We can see that the CV error did indeed keep decreasing. To check this, we show that the minimum RSS is indeed observed at `r T` terminal nodes:
+
+```{r}
+calif_cv$size[which.min(calif_cv$dev)]
+```
+
+However, the improvement in results is negligible from about 15 leaves. One could certainly also argue that a tree of size 5 might be preferable, given that it performs comparably to a tree of size 10, and the improvement from that point on is not drastic. In fact, decision trees will rarely be used for prediction purposes, since they will most often be outperformed by other algorithms. Their main value arguably lies in their interpretability, hence we will consider opting for the simpler model.
+
+```{r}
+#| label: fig-calif_pruned5
+#| fig-cap: Cailfornia housing regression tree pruned to 5 terminal nodes.
+ 
+# Prune the tree
+calif_pruned5 <- prune.tree(calif_bigtree, best = 5)
+plot(calif_pruned5)
+text(calif_pruned5)
+```
+
+We see that this tree only uses `income` and `latitude` as splitting variables, perhaps suggesting that it is too simplistic, especially when compared to the 15-node tree. 
+
+```{r}
+#| label: fig-calif_pruned15
+#| fig-cap: Cailfornia housing regression tree pruned to 15 terminal nodes.
+
+# Prune the tree
+calif_pruned15 <- prune.tree(calif_bigtree, best = 15)
+plot(calif_pruned15)
+text(calif_pruned15, cex = 0.5)
+```
+
+In @fig-calif_pruned15 we see that although the gain in RSS reduction is comparatively limited, the later splits make extensive use of the location information. However, for neighbourhoods with a median income above 3.547, only `income` and `house age` were used in subsequent splits, indicating less interaction between income and location in the wealthy areas.
+
+### Example -- Wine quality
+
+In this popular dataset collected by @misc_wine_quality_186, the task is to predict the quality of a wine based on several chemical characteristics.
+
+```{r}
+# Read in and split the data
+wine <- read.csv('data/winequality-white.csv', sep = ';')
+
+set.seed(5076)
+train <- sample(nrow(wine), 0.8*nrow(wine))
+```
+
+Start with a vanilla regression tree.
+
+```{r}
+#| label: fig-wine_van
+#| fig-cap: Vanilla regression tree fit to the white wine training data.
+wine_tree <- tree(quality ~ ., data = wine, subset = train)
+summary(wine_tree)
+
+plot(wine_tree)
+text(wine_tree, cex=0.8)
+```
+
+Perhaps we should build a larger tree and prune back.
+
+```{r}
+#| label: fig-wine_cv
+#| fig-cap: Cross-validated pruning results on the large tree fitted to the wine dataset.
+
+stopcrit <- tree.control(nobs = length(train), mindev = 0.004)
+wine_bigtree <- tree(quality ~ . , data = wine, subset = train, control = stopcrit)
+
+set.seed(123)
+cv_wine <- cv.tree(wine_bigtree)
+
+# Plot everything
+plot(cv_wine$size, cv_wine$dev, type = 'o',
+     pch = 16, col = 'navy', lwd = 2,
+     xlab = 'Number of terminal nodes', ylab = 'CV RSS')
+axis(side = 1, at = 1:max(cv_wine$size), labels = 1:max(cv_wine$size))
+
+# Add alpha values to the plot:
+alpha <- round(cv_wine$k)
+axis(3, at = cv_wine$size, lab = alpha)
+mtext(expression(alpha), 3, line = 2.5, cex = 1.5)
+
+# Highlight the minimum CV Error
+T <- cv_wine$size[which.min(cv_wine$dev)]
+abline(v = T, lty = 2, lwd = 2, col = 'red')
+```
+
+We see that the CV error for the 10-leaf model and the 20-leaf model is approximately the same. However, there is a clear elbow at size 5. At this point we have to make a decision on model complexity before applying it to the test set. Which model do you choose? Perhaps somewhere in between, or perhaps an even larger tree? 
+
+Let's now use all three models to predict on the test set. Note that this is "checking your answers" -- i.e. it is not part of the model selection procedure, but rather just comparing your already fixed decision with what the alternative *would* have provided. 
+
+```{r}
+# Pruning
+wine_tree5 <- prune.tree(wine_bigtree, best = 5)
+wine_tree10 <- prune.tree(wine_bigtree, best = 10)
+wine_tree20 <- prune.tree(wine_bigtree, best = 20)
+
+# Predicting
+yhat_5 <- predict(wine_tree5, newdata = wine[-train,])
+yhat_10 <- predict(wine_tree10, newdata = wine[-train,])
+yhat_20 <- predict(wine_tree20, newdata = wine[-train,])
+
+
+# Calculate test RMSE's
+y <- wine[-train, 'quality']
+
+(wine5_rmse <- sqrt(mean((yhat_5 - y)^2)))
+(wine10_rmse <- sqrt(mean((yhat_10 - y)^2)))
+(wine20_rmse <- sqrt(mean((yhat_20 - y)^2)))
+```
+
+It seems that, as per the CV plot, the larger trees tend to **not** overfit this dataset, since test set performance did actually improve (slightly) with larger trees. If prediction accuracy is the most important thing, we should prune back from a much larger tree. 
+
+However, a regression tree is unlikely to outperform ensemble methods in prediction accuracy, and its value lies in its interpretability. 
+
+Finally, let's see what proportion of variation the 20-leaf model was able to explain. 
+
+```{r}
+(1 - sum((y - yhat_20)^2)/sum((y - mean(y))^2))*100
+```
+
+Only about 32%! This again suggests that there is little to be gained by finding the perfect tree, since it will still perform poorly.
+
+---
