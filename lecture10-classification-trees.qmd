@@ -157,7 +157,7 @@ For the specific seed set above, we see that a more parsimonious model with 4 le
 #| label: fig-titanic_pruned
 #| fig-cap: Pruned classification tree fitted to the Titanic dataset.
 
-titanic_pruned <- prune.misclass(titanic_bigtree, best = T-1)
+titanic_pruned <- prune.misclass(titanic_bigtree, best = T)
 plot(titanic_pruned)
 text(titanic_pruned, pretty = 0)
 ```
